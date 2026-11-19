@@ -1,7 +1,8 @@
 import { db } from './db.js';
 import { icon } from './icons.js';
 import { keepAwake } from './wakelock.js';
-import { Viewer, forgetPdf } from './viewer.js';
+import { Viewer, forgetPdf, getDoc } from './viewer.js';
+import { pdfLines, textLines, suggestSteps, stepFromText, detectSizes, stepForSize } from './extract.js';
 import { buildBackup, readBackup, restoreBackup } from './backup.js';
 import {
   uid, esc, num, fmt, fmtDate, clamp, cmFromRows, rowsFromCm, rowsPerCm, reminderLabel, nextReminder,
@@ -709,6 +710,16 @@ function renderKnit(p) {
   const viewer = new Viewer(app.querySelector('#instr-pane'), p, {
     save: () => save(p),
     add: async (type) => { await addInstruction(p, type); await save(p); },
+    takeText: async (txt) => {
+      const cp0 = currentPart(p);
+      const st = { id: uid(), ...stepFromText(txt), done: false, reminder: null };
+      if (await stepDialog(p, cp0, st, true)) {
+        cp0.steps.push(st);
+        await save(p);
+        toast(`Schritt für „${cp0.name}“ übernommen`);
+        renderCounter();
+      }
+    },
   });
 
   const cp = app.querySelector('#counter-pane');
@@ -953,7 +964,10 @@ function renderPlan(p) {
             : `<button class="icon-btn" data-sedit="${s.id}" aria-label="Schritt bearbeiten">${icon('edit')}</button>`}
         </li>`;
       }).join('')}</ol>` : `<div class="empty small">${icon('list', 'big')}<p>Noch keine Schritte für „${esc(part.name)}“. Lege die Schritte aus deiner Anleitung an, zum Beispiel „Bündchen 6 cm“ oder „Abnahmen Armausschnitt“.</p></div>`}
-      <button class="btn primary big" data-a="step-add">${icon('plus')}<span>Schritt hinzufügen</span></button>`;
+      <div class="plan-add">
+        <button class="btn primary big" data-a="step-add">${icon('plus')}<span>Schritt hinzufügen</span></button>
+        ${importSources(p).length ? `<button class="btn big" data-a="step-import">${icon('pdf')}<span>Aus Anleitung übernehmen</span></button>` : ''}
+      </div>`;
   };
 
   const renderRight = () => {
@@ -1042,6 +1056,11 @@ function renderPlan(p) {
         if (r) { part.steps.push(s); save(p); renderLeft(); }
         break;
       }
+      case 'step-import': {
+        const n = await importDialog(p, part);
+        if (n) { await save(p); renderLeft(); toast(n === 1 ? '1 Schritt übernommen' : `${n} Schritte übernommen`); }
+        break;
+      }
       case 'part-new': {
         const name = await promptBox('Neues Teil', 'Name des Teils', '', 'Anlegen');
         if (name) { const x = newPart(name); p.parts.push(x); p.currentPartId = x.id; save(p); renderLeft(); }
@@ -1055,6 +1074,146 @@ function renderPlan(p) {
   renderLeft();
   renderRight();
   S.cleanup = () => { clearTimeout(noteTimer); save(p); };
+}
+
+// =====================================================================
+// SCHRITTE AUS DER ANLEITUNG ÜBERNEHMEN
+// =====================================================================
+const importSources = (p) => p.instructions.filter((i) => i.type === 'pdf' || (i.type === 'text' && i.text && i.text.trim()));
+
+// Zeigt die erkannten Schritte zum Auswählen. Gibt die Zahl der übernommenen Schritte zurück.
+function importDialog(p, part) {
+  const srcs = importSources(p);
+  let items = [];
+  let sizes = null;
+  let size = -1;
+  let perSection = false;
+  const lc = (x) => x.toLowerCase().replace(/[^a-zäöüß]/g, '');
+  const findPart = (name) => p.parts.find((x) => lc(x.name) === lc(name));
+  const ssel = p.view && p.view.sel && srcs.find((i) => i.id === p.view.sel[i.type]);
+  return modal({
+    title: 'Schritte aus Anleitung',
+    wide: true,
+    body: `
+      ${srcs.length > 1 ? `<label class="field"><span>Anleitung</span><select id="im-src">${srcs.map((i) => `<option value="${i.id}" ${ssel === i ? 'selected' : ''}>${esc(i.title)}</option>`).join('')}</select></label>` : ''}
+      <div id="im-opts"></div>
+      <div id="im-list" class="im-list"><div class="loading">Anleitung wird gelesen …</div></div>`,
+    actions: [
+      { label: 'Abbrechen', value: null },
+      {
+        label: 'Übernehmen', kind: 'primary',
+        handler: (el) => {
+          const picked = [...el.querySelectorAll('.im-step input:checked')].map((c) => items[+c.dataset.k]);
+          if (!picked.length) { toast('Bitte wähle mindestens einen Schritt aus.'); return false; }
+          const target = el.querySelector('#im-part') ? el.querySelector('#im-part').value : part.id;
+          let firstPart = null;
+          for (const it of picked) {
+            let dest;
+            if (perSection && it.section) {
+              dest = findPart(it.section);
+              if (!dest) { dest = newPart(it.section); p.parts.push(dest); }
+            } else dest = p.parts.find((x) => x.id === target) || part;
+            if (!firstPart) firstPart = dest;
+            const st = stepForSize(it, size, sizes && sizes.length);
+            dest.steps.push({ id: uid(), title: st.title, desc: st.desc, done: false, reminder: null });
+          }
+          if (firstPart) p.currentPartId = firstPart.id;
+          return picked.length;
+        },
+      },
+    ],
+    onMount: (el) => {
+      const list = el.querySelector('#im-list');
+      const opts = el.querySelector('#im-opts');
+      const okBtn = el.querySelector('.modal-actions [data-i="1"]');
+      const sections = () => [...new Set(items.filter((x) => x.type === 'step' && x.section && !x.info).map((x) => x.section))];
+      const updateCount = () => {
+        const n = el.querySelectorAll('.im-step input:checked').length;
+        okBtn.textContent = n === 1 ? '1 Schritt übernehmen' : `${n} Schritte übernehmen`;
+        okBtn.disabled = !n;
+        const c = el.querySelector('#im-count');
+        if (c) c.textContent = `${n} von ${el.querySelectorAll('.im-step').length} ausgewählt`;
+      };
+      const renderOpts = () => {
+        const secs = sections().filter((x) => items.some((y) => y.section === x && y.checked));
+        opts.innerHTML = `
+          ${sizes ? `<label class="field"><span>Deine Größe</span><select id="im-size"><option value="-1">Alle Größen anzeigen</option>${sizes.map((x, i) => `<option value="${i}" ${i === size ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>` : ''}
+          <div class="field"><span>Hinzufügen zu</span>
+            ${secs.length > 1 ? `<div class="segmented" id="im-mode"><button type="button" data-m="one" class="${perSection ? '' : 'on'}">Einem Teil</button><button type="button" data-m="sec" class="${perSection ? 'on' : ''}">Je Abschnitt ein Teil</button></div>` : ''}
+            ${perSection
+              ? '<small class="muted">Jeder Schritt kommt in das Teil, das so heißt wie sein Abschnitt (z. B. „Rückenteil“). Fehlende Teile werden angelegt.</small>'
+              : `<select id="im-part">${p.parts.map((x) => `<option value="${x.id}" ${x.id === part.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>`}
+          </div>`;
+      };
+      const renderList = () => {
+        const n = sizes && sizes.length;
+        let html = `<div class="im-top"><span id="im-count"></span><button type="button" class="btn small" data-all="0">Keine</button></div>`;
+        items.forEach((it, k) => {
+          if (it.type === 'section') {
+            html += `<div class="im-sec"><span>${esc(it.title)}${it.info ? ' <small>· Info</small>' : ''}</span><button type="button" class="btn small" data-sec="${k}">Alle</button></div>`;
+          } else {
+            const { title, desc } = stepForSize(it, size, n);
+            html += `<label class="im-step"><input type="checkbox" data-k="${k}" ${it.checked ? 'checked' : ''}><span><strong>${esc(title)}</strong>${desc && desc !== title ? `<small>${esc(desc)}</small>` : ''}</span>${it.page ? `<span class="im-page">S. ${it.page}</span>` : ''}</label>`;
+          }
+        });
+        list.innerHTML = html;
+        updateCount();
+      };
+      const load = async (src) => {
+        list.innerHTML = '<div class="loading">Anleitung wird gelesen …</div>';
+        okBtn.disabled = true;
+        let lines;
+        try {
+          lines = src.type === 'pdf' ? await pdfLines(await getDoc(src.fileId)) : textLines(src.text);
+        } catch (e) {
+          list.innerHTML = '<p class="im-msg">Die Anleitung konnte nicht gelesen werden.</p>';
+          return;
+        }
+        const words = lines.reduce((a, l) => a + l.text.trim().split(/\s+/).length, 0);
+        if (words < 15) {
+          items = [];
+          opts.innerHTML = '';
+          list.innerHTML = `<p class="im-msg">In dieser PDF ist kein lesbarer Text. Wahrscheinlich wurde sie eingescannt oder fotografiert. Die Schritte musst du dann leider von Hand anlegen.</p>`;
+          return;
+        }
+        items = suggestSteps(lines);
+        sizes = detectSizes(lines);
+        size = -1;
+        perSection = sections().filter((x) => items.some((y) => y.section === x && y.checked)).length > 1;
+        if (!items.some((x) => x.type === 'step')) {
+          opts.innerHTML = '';
+          list.innerHTML = '<p class="im-msg">In dieser Anleitung wurden keine Schritte erkannt. Du kannst im Stricken-Bildschirm Text in der PDF markieren und mit „Als Schritt übernehmen“ einzeln holen.</p>';
+          return;
+        }
+        renderOpts();
+        renderList();
+      };
+      el.addEventListener('change', (e) => {
+        if (e.target.id === 'im-src') load(srcs.find((i) => i.id === e.target.value));
+        else if (e.target.id === 'im-size') { size = +e.target.value; renderList(); }
+        else if (e.target.matches('.im-step input')) { items[+e.target.dataset.k].checked = e.target.checked; updateCount(); }
+      });
+      el.addEventListener('click', (e) => {
+        const m = e.target.closest('[data-m]');
+        if (m) { perSection = m.dataset.m === 'sec'; renderOpts(); return; }
+        const sec = e.target.closest('[data-sec]');
+        const all = e.target.closest('[data-all]');
+        if (sec || all) {
+          const k0 = sec ? +sec.dataset.sec : -1;
+          const boxes = [];
+          for (let k = k0 + 1; k < items.length; k++) {
+            if (sec && items[k].type === 'section') break;
+            if (items[k].type === 'step') boxes.push(k);
+          }
+          const on = sec ? !boxes.every((k) => items[k].checked) : false;
+          boxes.forEach((k) => { items[k].checked = on; });
+          el.querySelectorAll('.im-step input').forEach((c) => { c.checked = !!items[+c.dataset.k].checked; });
+          updateCount();
+        }
+      });
+      load(ssel || srcs[0]);
+    },
+  });
 }
 
 // Schritt anlegen/bearbeiten. Gibt true, 'delete' oder null zurück.

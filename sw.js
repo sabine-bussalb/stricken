@@ -1,5 +1,5 @@
 // Offline-Speicher der App. Bei jeder Änderung an der App VERSION erhöhen.
-const VERSION = 'stricken-v3';
+const VERSION = 'stricken-v4';
 const FILES = [
   './',
   './index.html',
@@ -7,6 +7,7 @@ const FILES = [
   './css/app.css',
   './js/app.js',
   './js/backup.js',
+  './js/extract.js',
   './js/db.js',
   './js/icons.js',
   './js/util.js',

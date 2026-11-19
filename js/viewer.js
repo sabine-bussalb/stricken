@@ -23,7 +23,7 @@ function pdfjs() {
 }
 
 const docCache = new Map();
-function getDoc(fileId) {
+export function getDoc(fileId) {
   if (docCache.has(fileId)) return docCache.get(fileId);
   const pr = (async () => {
     const lib = await pdfjs();
@@ -51,11 +51,12 @@ export function forgetPdf(fileId) {
 }
 
 export class Viewer {
-  constructor(root, project, { save, add }) {
+  constructor(root, project, { save, add, takeText }) {
     this.root = root;
     this.p = project;
     this.save = save;
     this.add = add;
+    this.takeText = takeText;
     this.p.view = this.p.view || {};
     this.p.view.sel = this.p.view.sel || {};
     if (!this.p.view.tab || !this.items(this.p.view.tab).length) {
@@ -73,6 +74,15 @@ export class Viewer {
       }
     });
     this.root.onclick = (e) => this.onClick(e);
+    // Markierten Text als Schritt übernehmen
+    this.selText = '';
+    this.onSel = () => {
+      const sel = document.getSelection();
+      const txt = sel && !sel.isCollapsed && this.sheet && this.sheet.contains(sel.anchorNode) ? sel.toString().trim() : '';
+      clearTimeout(this.selT);
+      if (txt) { this.selText = txt; this.showTake(true); } else this.selT = setTimeout(() => this.showTake(false), 400);
+    };
+    document.addEventListener('selectionchange', this.onSel);
     this.root.onchange = (e) => {
       const s = e.target.closest('[data-vsel]');
       if (s) { this.p.view.sel[this.p.view.tab] = s.value; this.persist(); this.render(); }
@@ -108,6 +118,8 @@ export class Viewer {
   destroy() {
     this.ro.disconnect();
     clearTimeout(this.rt);
+    clearTimeout(this.selT);
+    document.removeEventListener('selectionchange', this.onSel);
     if (this.st) { clearTimeout(this.st); this.save(); }
     if (this.task) { try { this.task.cancel(); } catch (e) { /* egal */ } }
     this.token++;
@@ -135,12 +147,13 @@ export class Viewer {
         ${head}
       </div>
       ${cur ? `
-        <div class="viewport" id="vp">
+        <div class="vp-wrap"><div class="viewport" id="vp">
           <div class="sheet ${cur.type}" id="sheet">
             <div class="sheet-content"><div class="loading">Wird geladen …</div></div>
             <div class="marker" id="marker"><div class="marker-handle" id="mhandle" aria-label="Linie verschieben">${icon('grip')}</div></div>
           </div>
         </div>
+        <button class="btn primary take-btn" data-v="take" hidden>${icon('plus')}<span>Als Schritt übernehmen</span></button></div>
         <div class="viewer-toolbar">${this.toolbarHtml(cur)}</div>` : `
         <div class="viewer-empty">
           ${icon(t[2], 'big')}
@@ -156,6 +169,12 @@ export class Viewer {
     this.ro.observe(this.vp);
     this.wire();
     this.renderContent();
+  }
+
+  showTake(on) {
+    const b = this.root.querySelector('.take-btn');
+    if (b && this.takeText) b.hidden = !on;
+    if (!on) this.selText = '';
   }
 
   toolbarHtml(cur) {
@@ -268,7 +287,8 @@ export class Viewer {
 
     // Antippen setzt die Linie an diese Stelle
     sheet.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('#mhandle') || !e.isPrimary) { this.tap = null; return; }
+      const sel = document.getSelection();
+      if (e.target.closest('#mhandle') || !e.isPrimary || (sel && !sel.isCollapsed)) { this.tap = null; return; }
       this.tap = { x: e.clientX, y: e.clientY, t: Date.now() };
     });
     sheet.addEventListener('pointerup', (e) => {
@@ -339,6 +359,14 @@ export class Viewer {
     const c = this.current();
     if (!c) return;
     switch (b.dataset.v) {
+      case 'take': {
+        const txt = this.selText;
+        const sel = document.getSelection();
+        if (sel) sel.removeAllRanges();
+        this.showTake(false);
+        if (txt && this.takeText) this.takeText(txt);
+        break;
+      }
       case 'zin': this.setZoom((c.zoom || 1) * 1.25); break;
       case 'zout': this.setZoom((c.zoom || 1) / 1.25); break;
       case 'zreset': this.setZoom(1); break;
@@ -406,9 +434,21 @@ export class Viewer {
       this.task = task;
       try { await task.promise; } catch (e) { canvas.width = 0; canvas.height = 0; return; }
       if (token !== this.token) { canvas.width = 0; canvas.height = 0; return; }
+      // Unsichtbare Textebene, damit man Text markieren kann
+      const wrap = document.createElement('div');
+      wrap.className = 'pdf-page';
+      wrap.style.setProperty('--scale-factor', String(scale));
+      const tl = document.createElement('div');
+      tl.className = 'textLayer';
+      wrap.append(canvas, tl);
       const old = content.querySelector('canvas');
-      content.replaceChildren(canvas);
+      content.replaceChildren(wrap);
       if (old) { old.width = 0; old.height = 0; }
+      try {
+        const lib = await pdfjs();
+        if (lib.TextLayer) await new lib.TextLayer({ textContentSource: page.streamTextContent(), container: tl, viewport }).render();
+      } catch (e) { /* ohne Textebene weiter */ }
+      if (token !== this.token) return;
       this.lineStep = Math.max(12, 14 * scale);
     } else if (cur.type === 'photo') {
       let img = content.querySelector('img');

@@ -232,7 +232,7 @@ async function backupDialog() {
   modal({
     title: 'Sicherung',
     body: `
-      <p>Eine Sicherung speichert <strong>alle Projekte samt PDFs, Fotos und Zählerständen</strong> in einer einzigen Datei. Lege sie in der Dateien-App ab, am besten in iCloud Drive.</p>
+      <p>Eine Sicherung speichert <strong>alle Projekte samt PDFs, Fotos und Zählerständen</strong> in einer einzigen Datei. Lege sie in der Dateien-App ab (am besten in iCloud Drive) oder schick sie per AirDrop an deinen Mac.</p>
       <p class="backup-date">${icon('shield')}<span>${backupLine()}</span></p>
       ${usage}
       <div class="stack">
@@ -264,11 +264,17 @@ async function createBackupFlow() {
   modal({
     title: 'Sicherung ist fertig',
     body: `<p>${res.projectCount} Projekte und ${res.fileCount} Dateien, zusammen ${mb} MB.</p>
-      <p>Tippe auf „In Dateien sichern“ und wähle im nächsten Fenster <strong>„In Dateien sichern“</strong> und einen Ordner, zum Beispiel iCloud Drive.</p>`,
+      ${canShare
+        ? `<p>Tippe auf „Sichern oder senden“. Im nächsten Fenster hast du die Wahl:</p>
+      <ul class="plain-list">
+        <li><strong>„In Dateien sichern“</strong> und einen Ordner wählen, zum Beispiel iCloud Drive.</li>
+        <li><strong>„AirDrop“</strong> und deinen Mac antippen. Auf dem Mac landet die Datei im Ordner „Downloads“.</li>
+      </ul>`
+        : '<p>Die Datei wird im Ordner „Downloads“ gespeichert.</p>'}`,
     actions: [
       { label: 'Abbrechen', value: null },
       {
-        label: 'In Dateien sichern',
+        label: canShare ? 'Sichern oder senden' : 'Herunterladen',
         kind: 'primary',
         handler: async () => {
           if (canShare) {

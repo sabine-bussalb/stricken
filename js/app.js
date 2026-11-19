@@ -1157,7 +1157,7 @@ function importDialog(p, part) {
       const renderOpts = () => {
         const secs = sections().filter((x) => items.some((y) => y.section === x && y.checked));
         opts.innerHTML = `
-          ${sizes ? `<label class="field"><span>Deine Größe</span><select id="im-size"><option value="-1">Alle Größen anzeigen</option>${sizes.map((x, i) => `<option value="${i}" ${i === size ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>` : ''}
+          ${sizes ? `<label class="field"><span>Größe für dieses Projekt</span><select id="im-size"><option value="-1">Alle Größen anzeigen</option>${sizes.map((x, i) => `<option value="${i}" ${i === size ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>` : ''}
           <div class="field"><span>Hinzufügen zu</span>
             ${secs.length > 1 && !onlyPart ? `<div class="segmented" id="im-mode"><button type="button" data-m="one" class="${perSection ? '' : 'on'}">Einem Teil</button><button type="button" data-m="sec" class="${perSection ? 'on' : ''}">Je Abschnitt ein Teil</button></div>` : ''}
             ${perSection && !onlyPart
@@ -1205,7 +1205,10 @@ function importDialog(p, part) {
         }
         items = suggestSteps(lines);
         sizes = detectSizes(lines);
-        size = sizes && p.patternSize != null && p.patternSize < sizes.length ? p.patternSize : -1;
+        // Größe aus dem Projekt („Größe“ in Projekt bearbeiten) oder zuletzt gewählte Größe
+        const norm = (x) => String(x || '').toLowerCase().replace(/\s/g, '');
+        const fromProject = sizes ? sizes.findIndex((x) => norm(x) === norm(p.size)) : -1;
+        size = fromProject >= 0 ? fromProject : sizes && p.patternSize != null && p.patternSize < sizes.length ? p.patternSize : -1;
         matchSecs = sections().filter((x) => sectionMatchesPart(x, part.name));
         onlyPart = matchSecs.length > 0;
         if (onlyPart) items.forEach((x) => { if (x.type === 'step' && matchSecs.includes(x.section)) x.checked = true; });
@@ -1220,7 +1223,13 @@ function importDialog(p, part) {
       };
       el.addEventListener('change', (e) => {
         if (e.target.id === 'im-src') load(srcs.find((i) => i.id === e.target.value));
-        else if (e.target.id === 'im-size') { size = +e.target.value; p.patternSize = size >= 0 ? size : null; save(p); renderList(); }
+        else if (e.target.id === 'im-size') {
+          size = +e.target.value;
+          p.patternSize = size >= 0 ? size : null;
+          if (size >= 0 && !String(p.size || '').trim()) p.size = sizes[size]; // Größe im Projekt eintragen
+          save(p);
+          renderList();
+        }
         else if (e.target.matches('.im-step input')) { items[+e.target.dataset.k].checked = e.target.checked; updateCount(); }
       });
       el.addEventListener('click', (e) => {

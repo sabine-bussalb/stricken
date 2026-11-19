@@ -6,7 +6,7 @@ Läuft im Safari und als App auf dem Home-Bildschirm, auch offline. **Alle Daten
 ## Einrichten (einmalig)
 
 1. Auf GitHub im Repository auf **Settings → Pages** gehen.
-2. Bei „Build and deployment“ als Quelle **Deploy from a branch** wählen, dann den Branch (z. B. `main`) und den Ordner **/ (root)** auswählen und speichern.
+2. Bei „Build and deployment“ als Quelle **Deploy from a branch** wählen, dann den Branch **`main`** und den Ordner **/ (root)** auswählen und speichern.
 3. Nach ein bis zwei Minuten steht oben die Adresse, z. B. `https://DEIN-NAME.github.io/stricken/`.
 4. Diese Adresse auf dem iPad in **Safari** öffnen.
 5. Auf **Teilen** (Quadrat mit Pfeil) tippen → **Zum Home-Bildschirm** → **Hinzufügen**.

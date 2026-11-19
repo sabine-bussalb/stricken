@@ -1,5 +1,5 @@
 // Offline-Speicher der App. Bei jeder Änderung an der App VERSION erhöhen.
-const VERSION = 'stricken-v2';
+const VERSION = 'stricken-v3';
 const FILES = [
   './',
   './index.html',
@@ -36,7 +36,7 @@ const FILES = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(FILES.map((f) => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {

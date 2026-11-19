@@ -1081,6 +1081,17 @@ function renderPlan(p) {
 // =====================================================================
 const importSources = (p) => p.instructions.filter((i) => i.type === 'pdf' || (i.type === 'text' && i.text && i.text.trim()));
 
+// Passt ein Abschnitt der Anleitung zu einem Teil? („Ärmel“ ↔ „Linker Ärmel“, „Rücken“ ↔ „Rückenteil“)
+const NAME_FILL = new Set(['linker', 'linke', 'linkes', 'rechter', 'rechte', 'rechtes', 'links', 'rechts', 'der', 'die', 'das', 'und', 'für', 'mit']);
+function sectionMatchesPart(sec, partName) {
+  const same = (w) => (/^(ausarbeit|fertigstell|zusammennäh|finish)/.test(w) ? 'fertig' : w.replace(/fuss/, 'fuß'));
+  const lw = (x) => x.toLowerCase().replace(/[^a-zäöüß ]/g, ' ').split(/\s+/).filter((w) => w.length >= 3 && !NAME_FILL.has(w)).map(same);
+  const a = lw(sec);
+  const b = lw(partName);
+  if (!a.length || !b.length) return false;
+  return a.some((x) => b.some((y) => x === y || x.startsWith(y) || y.startsWith(x)));
+}
+
 // Zeigt die erkannten Schritte zum Auswählen. Gibt die Zahl der übernommenen Schritte zurück.
 function importDialog(p, part) {
   const srcs = importSources(p);
@@ -1088,8 +1099,10 @@ function importDialog(p, part) {
   let sizes = null;
   let size = -1;
   let perSection = false;
-  const lc = (x) => x.toLowerCase().replace(/[^a-zäöüß]/g, '');
-  const findPart = (name) => p.parts.find((x) => lc(x.name) === lc(name));
+  let onlyPart = false;
+  let matchSecs = [];
+  // Alle Teile, die zu einem Abschnitt passen („Ärmel“ → „Linker Ärmel“, „Rechter Ärmel“)
+  const partsFor = (sec) => p.parts.filter((x) => sectionMatchesPart(sec, x.name));
   const ssel = p.view && p.view.sel && srcs.find((i) => i.id === p.view.sel[i.type]);
   return modal({
     title: 'Schritte aus Anleitung',
@@ -1107,18 +1120,25 @@ function importDialog(p, part) {
           if (!picked.length) { toast('Bitte wähle mindestens einen Schritt aus.'); return false; }
           const target = el.querySelector('#im-part') ? el.querySelector('#im-part').value : part.id;
           let firstPart = null;
+          let added = 0;
           for (const it of picked) {
             let dest;
+            let dests;
             if (perSection && it.section) {
-              dest = findPart(it.section);
-              if (!dest) { dest = newPart(it.section); p.parts.push(dest); }
-            } else dest = p.parts.find((x) => x.id === target) || part;
-            if (!firstPart) firstPart = dest;
+              dests = partsFor(it.section);
+              if (!dests.length) { const np = newPart(it.section); p.parts.push(np); dests = [np]; }
+            } else dests = [p.parts.find((x) => x.id === target) || part];
+            if (!firstPart) firstPart = dests[0];
             const st = stepForSize(it, size, sizes && sizes.length);
-            dest.steps.push({ id: uid(), title: st.title, desc: st.desc, done: false, reminder: null });
+            dests.forEach((dest) => {
+              if (dest.steps.some((x) => x.title === st.title && x.desc === st.desc)) return; // schon vorhanden
+              dest.steps.push({ id: uid(), title: st.title, desc: st.desc, done: false, reminder: null });
+              added += 1;
+            });
           }
           if (firstPart) p.currentPartId = firstPart.id;
-          return picked.length;
+          if (!added) toast('Diese Schritte sind schon im Fahrplan.');
+          return added || null;
         },
       },
     ],
@@ -1139,16 +1159,23 @@ function importDialog(p, part) {
         opts.innerHTML = `
           ${sizes ? `<label class="field"><span>Deine Größe</span><select id="im-size"><option value="-1">Alle Größen anzeigen</option>${sizes.map((x, i) => `<option value="${i}" ${i === size ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>` : ''}
           <div class="field"><span>Hinzufügen zu</span>
-            ${secs.length > 1 ? `<div class="segmented" id="im-mode"><button type="button" data-m="one" class="${perSection ? '' : 'on'}">Einem Teil</button><button type="button" data-m="sec" class="${perSection ? 'on' : ''}">Je Abschnitt ein Teil</button></div>` : ''}
-            ${perSection
-              ? '<small class="muted">Jeder Schritt kommt in das Teil, das so heißt wie sein Abschnitt (z. B. „Rückenteil“). Fehlende Teile werden angelegt.</small>'
+            ${secs.length > 1 && !onlyPart ? `<div class="segmented" id="im-mode"><button type="button" data-m="one" class="${perSection ? '' : 'on'}">Einem Teil</button><button type="button" data-m="sec" class="${perSection ? 'on' : ''}">Je Abschnitt ein Teil</button></div>` : ''}
+            ${perSection && !onlyPart
+              ? '<small class="muted">Jeder Schritt kommt in das passende Teil (z. B. „Ärmel“ in „Linker Ärmel“ und „Rechter Ärmel“). Fehlende Teile werden angelegt.</small>'
               : `<select id="im-part">${p.parts.map((x) => `<option value="${x.id}" ${x.id === part.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>`}
           </div>`;
       };
       const renderList = () => {
         const n = sizes && sizes.length;
-        let html = `<div class="im-top"><span id="im-count"></span><button type="button" class="btn small" data-all="0">Keine</button></div>`;
+        let html = '';
+        if (matchSecs.length) {
+          html += onlyPart
+            ? `<div class="im-filter">${icon('list')}<span>Nur der Abschnitt ${matchSecs.map((x) => `„${esc(x)}“`).join(', ')} für „${esc(part.name)}“</span><button type="button" class="btn small" data-only="0">Ganze Anleitung</button></div>`
+            : `<div class="im-filter">${icon('list')}<span>Ganze Anleitung</span><button type="button" class="btn small" data-only="1">Nur ${matchSecs.map((x) => `„${esc(x)}“`).join(', ')}</button></div>`;
+        }
+        html += `<div class="im-top"><span id="im-count"></span><button type="button" class="btn small" data-all="0">Keine</button></div>`;
         items.forEach((it, k) => {
+          if (onlyPart && !matchSecs.includes(it.type === 'section' ? it.title : it.section)) return;
           if (it.type === 'section') {
             html += `<div class="im-sec"><span>${esc(it.title)}${it.info ? ' <small>· Info</small>' : ''}</span><button type="button" class="btn small" data-sec="${k}">Alle</button></div>`;
           } else {
@@ -1178,8 +1205,11 @@ function importDialog(p, part) {
         }
         items = suggestSteps(lines);
         sizes = detectSizes(lines);
-        size = -1;
-        perSection = sections().filter((x) => items.some((y) => y.section === x && y.checked)).length > 1;
+        size = sizes && p.patternSize != null && p.patternSize < sizes.length ? p.patternSize : -1;
+        matchSecs = sections().filter((x) => sectionMatchesPart(x, part.name));
+        onlyPart = matchSecs.length > 0;
+        if (onlyPart) items.forEach((x) => { if (x.type === 'step' && matchSecs.includes(x.section)) x.checked = true; });
+        perSection = !onlyPart && sections().filter((x) => items.some((y) => y.section === x && y.checked)).length > 1;
         if (!items.some((x) => x.type === 'step')) {
           opts.innerHTML = '';
           list.innerHTML = '<p class="im-msg">In dieser Anleitung wurden keine Schritte erkannt. Du kannst im Stricken-Bildschirm Text in der PDF markieren und mit „Als Schritt übernehmen“ einzeln holen.</p>';
@@ -1190,12 +1220,14 @@ function importDialog(p, part) {
       };
       el.addEventListener('change', (e) => {
         if (e.target.id === 'im-src') load(srcs.find((i) => i.id === e.target.value));
-        else if (e.target.id === 'im-size') { size = +e.target.value; renderList(); }
+        else if (e.target.id === 'im-size') { size = +e.target.value; p.patternSize = size >= 0 ? size : null; save(p); renderList(); }
         else if (e.target.matches('.im-step input')) { items[+e.target.dataset.k].checked = e.target.checked; updateCount(); }
       });
       el.addEventListener('click', (e) => {
         const m = e.target.closest('[data-m]');
         if (m) { perSection = m.dataset.m === 'sec'; renderOpts(); return; }
+        const only = e.target.closest('[data-only]');
+        if (only) { onlyPart = only.dataset.only === '1'; if (onlyPart) perSection = false; renderOpts(); renderList(); return; }
         const sec = e.target.closest('[data-sec]');
         const all = e.target.closest('[data-all]');
         if (sec || all) {
@@ -1203,7 +1235,7 @@ function importDialog(p, part) {
           const boxes = [];
           for (let k = k0 + 1; k < items.length; k++) {
             if (sec && items[k].type === 'section') break;
-            if (items[k].type === 'step') boxes.push(k);
+            if (items[k].type === 'step' && (!onlyPart || matchSecs.includes(items[k].section))) boxes.push(k);
           }
           const on = sec ? !boxes.every((k) => items[k].checked) : false;
           boxes.forEach((k) => { items[k].checked = on; });

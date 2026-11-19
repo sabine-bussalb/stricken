@@ -1149,7 +1149,10 @@ function importDialog(p, part) {
       const sections = () => [...new Set(items.filter((x) => x.type === 'step' && x.section && !x.info).map((x) => x.section))];
       const updateCount = () => {
         const n = el.querySelectorAll('.im-step input:checked').length;
-        okBtn.textContent = n === 1 ? '1 Schritt übernehmen' : `${n} Schritte übernehmen`;
+        const ps = el.querySelector('#im-part');
+        const tp = ps ? p.parts.find((x) => x.id === ps.value) : null;
+        const where = perSection && !onlyPart ? ' in passende Teile' : tp ? ` zu „${tp.name}“` : '';
+        okBtn.textContent = `${n === 1 ? '1 Schritt' : `${n} Schritte`}${where} übernehmen`;
         okBtn.disabled = !n;
         const c = el.querySelector('#im-count');
         if (c) c.textContent = `${n} von ${el.querySelectorAll('.im-step').length} ausgewählt`;
@@ -1231,10 +1234,11 @@ function importDialog(p, part) {
           renderList();
         }
         else if (e.target.matches('.im-step input')) { items[+e.target.dataset.k].checked = e.target.checked; updateCount(); }
+        else if (e.target.id === 'im-part') updateCount();
       });
       el.addEventListener('click', (e) => {
         const m = e.target.closest('[data-m]');
-        if (m) { perSection = m.dataset.m === 'sec'; renderOpts(); return; }
+        if (m) { perSection = m.dataset.m === 'sec'; renderOpts(); updateCount(); return; }
         const only = e.target.closest('[data-only]');
         if (only) { onlyPart = only.dataset.only === '1'; if (onlyPart) perSection = false; renderOpts(); renderList(); return; }
         const sec = e.target.closest('[data-sec]');
